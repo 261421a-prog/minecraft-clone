@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Minecraft Clone</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: monospace; }
+    #mc { display: block; width: 100vw; height: 100vh; }
+    #crosshair {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: white; font-size: 22px;
+      pointer-events: none;
+      text-shadow: 1px 1px 2px #000;
+    }
+    #hud {
+      position: fixed; bottom: 12px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 6px;
+    }
+    #info {
+      position: fixed; top: 10px; left: 10px;
+      color: white; font-size: 12px;
+      text-shadow: 1px 1px 2px #000;
+      pointer-events: none;
+      line-height: 1.6;
+    }
+    #block-name {
+      position: fixed; bottom: 52px; left: 50%;
+      transform: translateX(-50%);
+      color: white; font-size: 12px;
+      text-shadow: 1px 1px 2px #000;
+    }
+    #locked-msg {
+      position: fixed; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: white; font-size: 16px;
+      text-shadow: 2px 2px 4px #000;
+      text-align: center; cursor: pointer;
+      background: rgba(0,0,0,0.5);
+      padding: 20px 30px; border-radius: 8px;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="mc"></canvas>
+  <div id="crosshair">+</div>
+  <div id="hud"></div>
+  <div id="info">
+    <b>WASD</b> move &nbsp; <b>Space</b> jump &nbsp; <b>Mouse</b> look<br>
+    <b>Left click</b> break &nbsp; <b>Right click</b> place &nbsp; <b>1–6</b> select block
+  </div>
+  <div id="block-name"></div>
+  <div id="locked-msg">
+    Click to Play<br>
+    <span style="font-size:12px;opacity:0.8">Locks mouse for look controls</span>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    const BLOCK_TYPES = [
+      { name: 'Grass',  top: '#5a8a3c', side: '#7a5c3a', bottom: '#7a5c3a' },
+      { name: 'Dirt',   top: '#7a5c3a', side: '#7a5c3a', bottom: '#7a5c3a' },
+      { name: 'Stone',  top: '#888',    side: '#888',    bottom: '#888'    },
+      { name: 'Wood',   top: '#b87333', side: '#8B6914', bottom: '#b87333' },
+      { name: 'Sand',   top: '#e8d59a', side: '#e8d59a', bottom: '#e8d59a' },
+      { name: 'Leaves', top: '#2d6e2d', side: '#2d6e2d', bottom: '#2d6e2d' },
+    ];
+
+    function makeBlockMaterial(bt) {
+      return [bt.top, bt.side, bt.side, bt.side, bt.side, bt.bottom]
+        .map(c => new THREE.MeshLambertMaterial({ color: new THREE.Color(c) }));
+    }
+
+    const canvas = document.getElementById('mc');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#87CEEB');
+    scene.fog = new THREE.Fog('#87CEEB', 20, 60);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+
+    const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+    sun.position.set(10, 30, 10);
+    sun.castShadow = true;
+    scene.add(sun);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+    const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+    const blocks = new Map();
+    const meshes = new Map();
+
+    function key(x, y, z) { return `${x},${y},${z}`; }
+
+    function addBlock(x, y, z, type = 0) {
+      const k = key(x, y, z);
+      if (blocks.has(k)) return;
+      blocks.set(k, type);
+      const mesh = new THREE.Mesh(blockGeo, makeBlockMaterial(BLOCK_TYPES[type]));
+      mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData = { bx: x, by: y, bz: z };
+      scene.add(mesh);
+      meshes.set(k, mesh);
+    }
+
+    function removeBlock(x, y, z) {
+      const k = key(x, y, z);
+      if (!blocks.has(k)) return;
+      blocks.delete(k);
+      const m = meshes.get(k);
+      if (m) { scene.remove(m); meshes.delete(k); }
+    }
+
+    function noise(x, z) {
+      return Math.sin(x * 0.3) * 3 + Math.cos(z * 0.25) * 2 + Math.sin((x + z) * 0.15) * 2;
+    }
+
+    // Generate terrain
+    for (let x = 0; x < 24; x++) {
+      for (let z = 0; z < 24; z++) {
+        const h = Math.floor(noise(x, z)) + 5;
+        addBlock(x, h, z, 0);                             // grass top
+        for (let y = h - 1; y >= h - 3; y--) addBlock(x, y, z, 1); // dirt
+        for (let y = h - 4; y >= 0; y--) addBlock(x, y, z, 2);      // stone
+
+        // Random trees
+        if (Math.random() < 0.04 && h > 3) {
+          const th = h + Math.floor(Math.random() * 2) + 3;
+          for (let ty = h + 1; ty <= th; ty++) addBlock(x, ty, z, 3); // trunk
+          for (let lx = x - 2; lx <= x + 2; lx++)
+            for (let lz = z - 2; lz <= z + 2; lz++)
+              for (let ly = th - 1; ly <= th + 1; ly++)
+                if (Math.abs(lx - x) + Math.abs(lz - z) <= 2)
+                  addBlock(lx, ly, lz, 5); // leaves
+        }
+      }
+    }
+
+    camera.position.set(8, Math.floor(noise(8, 8)) + 7, 8);
+
+    // Player state
+    let pitch = 0, yaw = 0;
+    let vx = 0, vy = 0, vz = 0;
+    let onGround = false;
+    const keys = {};
+    let locked = false;
+    let selectedBlock = 0;
+
+    const hudEl = document.getElementById('hud');
+    const blockNameEl = document.getElementById('block-name');
+    const lockedMsg = document.getElementById('locked-msg');
+
+    // Build hotbar
+    BLOCK_TYPES.forEach((bt, i) => {
+      const slot = document.createElement('div');
+      slot.style.cssText = `
+        width:36px;height:36px;background:${bt.side};
+        border:2px solid ${i === 0 ? 'white' : 'rgba(255,255,255,0.4)'};
+        border-radius:4px;cursor:pointer;display:flex;
+        align-items:center;justify-content:center;
+        font-size:9px;color:white;text-shadow:1px 1px 1px #000;text-align:center;line-height:1.2
+      `;
+      slot.textContent = bt.name;
+      slot.onclick = () => selectBlock(i);
+      slot.id = 'slot' + i;
+      hudEl.appendChild(slot);
+    });
+
+    function selectBlock(i) {
+      document.getElementById('slot' + selectedBlock).style.borderColor = 'rgba(255,255,255,0.4)';
+      selectedBlock = i;
+      document.getElementById('slot' + i).style.borderColor = 'white';
+      blockNameEl.textContent = BLOCK_TYPES[i].name;
+      setTimeout(() => blockNameEl.textContent = '', 1500);
+    }
+
+    // Pointer lock
+    canvas.addEventListener('click', () => { if (!locked) canvas.requestPointerLock(); });
+    document.addEventListener('pointerlockchange', () => {
+      locked = document.pointerLockElement === canvas;
+      lockedMsg.style.display = locked ? 'none' : 'block';
+    });
+    document.addEventListener('mousemove', e => {
+      if (!locked) return;
+      yaw -= e.movementX * 0.002;
+      pitch -= e.movementY * 0.002;
+      pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+    });
+
+    document.addEventListener('keydown', e => {
+      keys[e.code] = true;
+      if (e.code === 'Digit1') selectBlock(0);
+      if (e.code === 'Digit2') selectBlock(1);
+      if (e.code === 'Digit3') selectBlock(2);
+      if (e.code === 'Digit4') selectBlock(3);
+      if (e.code === 'Digit5') selectBlock(4);
+      if (e.code === 'Digit6') selectBlock(5);
+      if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+    });
+    document.addEventListener('keyup', e => { keys[e.code] = false; });
+
+    // Block raycast
+    const raycaster = new THREE.Raycaster();
+    canvas.addEventListener('mousedown', e => {
+      if (!locked) return;
+      raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+      const hits = raycaster.intersectObjects(Array.from(meshes.values()));
+      if (hits.length > 0) {
+        const hit = hits[0];
+        const { bx, by, bz } = hit.object.userData;
+        if (e.button === 0) {
+          removeBlock(bx, by, bz);
+        } else if (e.button === 2) {
+          const n = hit.face.normal;
+          addBlock(bx + Math.round(n.x), by + Math.round(n.y), bz + Math.round(n.z), selectedBlock);
+        }
+      }
+    });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    // Collision
+    function collidesAt(px, py, pz) {
+      const hw = 0.3, ph = 1.8;
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dy = -2; dy <= 1; dy++)
+          for (let dz = -1; dz <= 1; dz++) {
+            const bx = Math.floor(px) + dx, by2 = Math.floor(py) + dy, bz2 = Math.floor(pz) + dz;
+            if (!blocks.has(key(bx, by2, bz2))) continue;
+            if (px + hw > bx && px - hw < bx + 1 &&
+                py + 0.05 > by2 && py - ph < by2 + 1 &&
+                pz + hw > bz2 && pz - hw < bz2 + 1) return true;
+          }
+      return false;
+    }
+
+    // Game loop
+    let lastTime = performance.now();
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = performance.now();
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      if (locked) {
+        const fwd = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), 0, -Math.cos(yaw) * Math.cos(pitch)).normalize();
+        const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw)).normalize();
+        let mx = 0, mz = 0;
+        if (keys['KeyW'] || keys['ArrowUp'])    { mx += fwd.x;   mz += fwd.z; }
+        if (keys['KeyS'] || keys['ArrowDown'])   { mx -= fwd.x;   mz -= fwd.z; }
+        if (keys['KeyA'] || keys['ArrowLeft'])   { mx -= right.x; mz -= right.z; }
+        if (keys['KeyD'] || keys['ArrowRight'])  { mx += right.x; mz += right.z; }
+        const len = Math.sqrt(mx * mx + mz * mz) || 1;
+        vx = mx === 0 && mz === 0 ? 0 : (mx / len) * 5;
+        vz = mx === 0 && mz === 0 ? 0 : (mz / len) * 5;
+        if (keys['Space'] && onGround) { vy = 7; onGround = false; }
+        vy -= 20 * dt;
+
+        let cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+        if (!collidesAt(cx + vx * dt, cy, cz)) cx += vx * dt; else vx = 0;
+        if (!collidesAt(cx, cy + vy * dt, cz)) { cy += vy * dt; onGround = false; }
+        else { if (vy < 0) onGround = true; vy = 0; }
+        if (!collidesAt(cx, cy, cz + vz * dt)) cz += vz * dt; else vz = 0;
+        camera.position.set(cx, cy, cz);
+      }
+
+      camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+  </script>
+</body>
+</html>
